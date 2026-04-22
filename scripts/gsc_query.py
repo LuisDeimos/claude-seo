@@ -104,22 +104,28 @@ def query_search_analytics(
         "endDate": end_date,
         "dimensions": dimensions,
         "type": search_type,
-        "rowLimit": min(row_limit, 25000),
         "dataState": data_state,
     }
 
     if filters:
         body["dimensionFilterGroups"] = [{"filters": filters}]
 
-    # Auto-paginate
+    # Auto-paginate up to the user-requested row_limit. Page size is the
+    # API maximum (25k); the per-request ask is capped at what we still
+    # need so we never fetch more rows than the caller asked for.
+    GSC_API_MAX_PER_REQUEST = 25000
+    SAFETY_CAP = 100000
+    effective_cap = min(row_limit, SAFETY_CAP)
+
     all_rows = []
     start_row = 0
-    page_size = min(row_limit, 25000)
 
     try:
-        while True:
+        while len(all_rows) < effective_cap:
+            remaining = effective_cap - len(all_rows)
+            per_page = min(GSC_API_MAX_PER_REQUEST, remaining)
             body["startRow"] = start_row
-            body["rowLimit"] = page_size
+            body["rowLimit"] = per_page
 
             response = service.searchanalytics().query(
                 siteUrl=site_url, body=body
@@ -128,14 +134,11 @@ def query_search_analytics(
             rows = response.get("rows", [])
             all_rows.extend(rows)
 
-            if len(rows) < page_size:
+            # API returned fewer rows than requested -> no more data.
+            if len(rows) < per_page:
                 break
 
-            start_row += page_size
-
-            # Safety: cap at 100,000 rows
-            if start_row >= 100000:
-                break
+            start_row += len(rows)
 
     except Exception as e:
         error_str = str(e)
@@ -154,6 +157,9 @@ def query_search_analytics(
         else:
             result["error"] = f"GSC API error: {e}"
         return result
+
+    # Truncate defensively in case the API ever over-delivers.
+    all_rows = all_rows[:effective_cap]
 
     # Process rows
     total_clicks = 0

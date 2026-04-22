@@ -21,7 +21,7 @@ from urllib.parse import urlparse
 try:
     import requests
 except ImportError:
-    print("Error: requests library required. Install with: pip install requests")
+    print("Error: requests library required. Install with: pip install requests", file=sys.stderr)
     sys.exit(1)
 
 # Import credential helper (same directory)
@@ -98,6 +98,7 @@ def run_pagespeed(
         "passed_audits_count": 0,
         "seo_audits": [],
         "accessibility_audits": [],
+        "audit_details": {},
         "analysis_timestamp": None,
         "error": None,
     }
@@ -509,6 +510,18 @@ def main():
     args = parser.parse_args()
 
     api_key = args.api_key or get_api_key()
+
+    # Warn transparently if no API key is configured. Without one, PSI falls
+    # into an unauthenticated bucket (quota_limit_value=0 on many GCP projects)
+    # and the resulting 429 error is confusing.
+    if not api_key and not args.crux_only:
+        print(
+            "Warning: no Google API key found. PSI will likely fail with "
+            "quota exceeded. Set GOOGLE_API_KEY or add 'api_key' to "
+            "~/.config/claude-seo/google-api.json (run: "
+            "python scripts/google_auth.py --setup).",
+            file=sys.stderr,
+        )
 
     if args.crux_only:
         if not api_key:

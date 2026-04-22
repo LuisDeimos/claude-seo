@@ -1,25 +1,46 @@
 #!/usr/bin/env python3
 """
-Capture screenshots of web pages using Playwright.
+Capture screenshots of web pages.
+
+Primary engine: Playwright (accurate viewport, DPR, network idle).
+Fallback engine: headless google-chrome/chromium via subprocess — used when
+Playwright is not installed so the SEO audit pipeline keeps working with a
+system-wide Chrome instead of blocking on a ~200 MB Playwright download.
 
 Usage:
     python capture_screenshot.py https://example.com
-    python capture_screenshot.py https://example.com --mobile
+    python capture_screenshot.py https://example.com --viewport mobile
     python capture_screenshot.py https://example.com --output screenshots/
 """
 
 import argparse
 import ipaddress
 import os
+import shutil
 import socket
+import subprocess
 import sys
 from urllib.parse import ParseResult, urlparse
 
 try:
     from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
+    HAS_PLAYWRIGHT = True
 except ImportError:
-    print("Error: playwright required. Install with: pip install playwright && playwright install chromium")
-    sys.exit(1)
+    HAS_PLAYWRIGHT = False
+    sync_playwright = None
+    # Placeholder so `except PlaywrightTimeout` in capture_screenshot() does
+    # not raise NameError when Playwright is missing.
+    class PlaywrightTimeout(Exception):
+        pass
+
+
+def _find_chrome_binary() -> str:
+    """Return path to a system chrome/chromium binary, or '' if none exists."""
+    for name in ("google-chrome", "chromium", "chromium-browser", "chrome"):
+        path = shutil.which(name)
+        if path:
+            return path
+    return ""
 
 
 VIEWPORTS = {
@@ -69,6 +90,7 @@ def capture_screenshot(
         "url": url,
         "output": output_path,
         "viewport": viewport,
+        "engine": None,
         "success": False,
         "error": None,
     }
@@ -96,32 +118,85 @@ def capture_screenshot(
 
     vp = VIEWPORTS[viewport]
 
+    if HAS_PLAYWRIGHT:
+        result["engine"] = "playwright"
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                context = browser.new_context(
+                    viewport={"width": vp["width"], "height": vp["height"]},
+                    device_scale_factor=2 if viewport == "mobile" else 1,
+                )
+                page = context.new_page()
+                page.goto(url, wait_until="networkidle", timeout=timeout)
+                page.wait_for_timeout(1000)
+                page.screenshot(path=output_path, full_page=full_page)
+                result["success"] = True
+                browser.close()
+        except PlaywrightTimeout:
+            result["error"] = f"Page load timed out after {timeout}ms"
+        except Exception as e:
+            result["error"] = str(e)
+        return result
+
+    # Fallback: system chrome/chromium via subprocess. Less accurate (no
+    # device_scale_factor for mobile, no networkidle wait), but good enough
+    # for smoke-tests and visual audits without Playwright installed.
+    chrome_bin = _find_chrome_binary()
+    if not chrome_bin:
+        result["error"] = (
+            "Neither Playwright nor a system chrome/chromium binary was found. "
+            "Install Playwright: pip install playwright && playwright install chromium. "
+            "Or install google-chrome / chromium system-wide."
+        )
+        return result
+
+    result["engine"] = "chrome-headless"
+    dpr = 2 if viewport == "mobile" else 1
+
+    # --full-page-screenshot exists in Chrome 98+; older Chrome silently ignores it.
+    cmd = [
+        chrome_bin,
+        "--headless=new",
+        "--disable-gpu",
+        "--no-sandbox",
+        "--hide-scrollbars",
+        f"--window-size={vp['width']},{vp['height']}",
+        f"--force-device-scale-factor={dpr}",
+        f"--screenshot={os.path.abspath(output_path)}",
+        f"--virtual-time-budget={timeout}",
+    ]
+    if full_page:
+        cmd.append("--full-page-screenshot")
+    cmd.append(url)
+
     try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(
-                viewport={"width": vp["width"], "height": vp["height"]},
-                device_scale_factor=2 if viewport == "mobile" else 1,
-            )
-            page = context.new_page()
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=max(timeout / 1000 + 30, 60),
+        )
+    except subprocess.TimeoutExpired:
+        result["error"] = f"chrome-headless timed out after {timeout}ms"
+        return result
+    except OSError as e:
+        result["error"] = f"chrome-headless failed to start: {e}"
+        return result
 
-            # Navigate and wait for network idle
-            page.goto(url, wait_until="networkidle", timeout=timeout)
+    if proc.returncode != 0:
+        stderr_tail = (proc.stderr or "").strip().splitlines()[-3:]
+        result["error"] = (
+            f"chrome-headless exited {proc.returncode}: "
+            + " | ".join(stderr_tail)
+        )
+        return result
 
-            # Wait a bit more for any lazy-loaded content
-            page.wait_for_timeout(1000)
+    if not os.path.isfile(output_path) or os.path.getsize(output_path) == 0:
+        result["error"] = "chrome-headless produced no screenshot file"
+        return result
 
-            # Capture screenshot
-            page.screenshot(path=output_path, full_page=full_page)
-
-            result["success"] = True
-            browser.close()
-
-    except PlaywrightTimeout:
-        result["error"] = f"Page load timed out after {timeout}ms"
-    except Exception as e:
-        result["error"] = str(e)
-
+    result["success"] = True
     return result
 
 
