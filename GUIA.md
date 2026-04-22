@@ -75,17 +75,19 @@ Por HTTPS (alternativa si no tienes SSH):
 git clone https://github.com/LuisDeimos/claude-seo.git ~/Documentos/kernel-seo-src
 ```
 
-### 2.2 Seleccionar la rama con todas las features
+### 2.2 (Opcional) Pinear a una versión etiquetada
 
-En el estado actual del proyecto, la rama que contiene **todos** los
-skills nuevos + fixes es `feature/seo-keywords`. Una vez que el stack se
-haya validado en producción por varias semanas, se recomienda
-fusionar esa rama a `main` y trabajar desde ahí.
+Por default `git clone` te deja en la rama `main`, que siempre apunta al
+último estado estable (tag más reciente + fixes pendientes). Si
+prefieres pinear a una versión específica (reproducibilidad,
+producción):
 
 ```bash
 cd ~/Documentos/kernel-seo-src
-git checkout feature/seo-keywords
+git checkout v0.1.0       # o la versión que quieras
 ```
+
+Para ver las versiones disponibles: `git tag -l`.
 
 ### 2.3 Correr el instalador
 
@@ -551,15 +553,15 @@ incorporar fixes upstream:
 cd ~/Documentos/kernel-seo-src
 git fetch upstream
 git checkout main
-git merge upstream/main   # resuelve conflictos si los hay
-git checkout feature/seo-keywords
-git rebase main           # o merge, según preferencia
+git log main..upstream/main     # revisar commits nuevos antes de merge
+git merge upstream/main         # resuelve conflictos si los hay
 ```
 
-**Antes de ejecutar**: lee los commits nuevos del upstream
-(`git log main..upstream/main`) y evalúa si introducen código que
-cambia comportamiento. La regla del proyecto: no confiar ciegamente en
-código de terceros; revisar antes de usar.
+**Antes de ejecutar el merge**: lee los commits nuevos del upstream y
+evalúa si introducen código que cambia comportamiento. La regla del
+proyecto: no confiar ciegamente en código de terceros; revisar antes de
+usar. Si un commit upstream es riesgoso, se puede cherry-pick selectivo
+en vez de merge completo.
 
 ### 9.2 Reinstalar tras cambios locales o pull
 
@@ -572,12 +574,13 @@ Es idempotente. Los snapshots, clientes y credenciales no se tocan.
 
 ### 9.3 Commits propios
 
-Siempre trabajar en `feature/*` branches, nunca directo sobre
-`kernel-fixes` o `main`. Convención usada en este fork:
+Siempre trabajar en una rama feature, nunca directo sobre `main`.
+Convención usada en este fork:
 
-- `kernel-fixes/*` para correcciones al upstream
-- `feature/<nombre>` para funcionalidad nueva
-- Merges hacia `main` solo después de validación con un cliente real
+- `feature/<nombre>` para funcionalidad nueva.
+- `fix/<nombre>` para correcciones puntuales.
+- Merges a `main` solo después de validar con al menos un cliente real
+  y cortar un tag nuevo (`vX.Y.Z`) para marcar el baseline.
 
 ---
 
@@ -590,7 +593,7 @@ Siempre trabajar en `feature/*` branches, nunca directo sobre
 | `KeyError: 'audit_details'` (ya parchado en v1.9.x + kernel) | Caso imposible tras el fix | Reinstalar: `bash install-kernel.sh` |
 | `playwright required` | No instalaste Chromium para Playwright | Instalar `google-chrome-stable` del sistema — el fallback lo usa automáticamente |
 | `No sitio.json found in X or any ancestor` | `cd` a un directorio fuera de un cliente | `cd ~/Documentos/kernel-seo-clientes/<slug>` o pasa `--client-dir` |
-| `--limit` de gsc_query devuelve más filas | Versión vieja del script | Reinstalar desde la rama `kernel-fixes` o posterior |
+| `--limit` de gsc_query devuelve más filas | Versión previa a v0.1.0 | Reinstalar: `git pull && bash install-kernel.sh` |
 | OAuth token expirado | Corren meses | El refresh es automático; si falla: re-ejecutar `--auth` |
 | `gsc_property NOT in this account` al crear cliente | El cliente aún no te dio acceso en GSC | GSC del cliente → Configuración → Usuarios → agregar tu email |
 
@@ -636,13 +639,16 @@ claude-seo/                          (nuestro fork)
 └── docs/                            <-- doc upstream
 ```
 
-Ramas en el remoto:
+Ramas y tags en el remoto:
 
-- `main` — upstream base + futuras merges validadas
-- `kernel-fixes` — 7 fixes de seguridad + SEO (2 commits)
-- `feature/seo-cliente` — workspace per-client (1 commit)
-- `feature/seo-rankings` — tracker SQLite (1 commit)
-- `feature/seo-keywords` — portfolio + suggest (1 commit)
+- `main` — rama estable, contiene todo el trabajo validado. Es la
+  default branch del repo en GitHub y el objetivo por default de
+  `install-kernel.sh`.
+- `v0.1.0` (tag) — primer baseline estable: upstream v1.9.0 + 7 fixes
+  (seguridad + SEO) + 3 skills nuevos (`seo-cliente`, `seo-rankings`,
+  `seo-keywords`) + esta guía.
+- `feature/*` — ramas de trabajo previas, preservadas como referencia
+  hasta que ya no hagan falta. Ninguna es el objetivo de instalación.
 
 ---
 

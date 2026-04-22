@@ -18,8 +18,10 @@ main() {
 
     # Our fork, not the upstream. Override with CLAUDE_SEO_REPO if needed.
     REPO_URL="${CLAUDE_SEO_REPO:-https://github.com/LuisDeimos/claude-seo}"
-    # Default to kernel-fixes branch until we cut our own tag.
-    REPO_REF="${CLAUDE_SEO_REF:-kernel-fixes}"
+    # Default to the main branch, which carries all kernel features +
+    # fixes. Override with CLAUDE_SEO_REF=v0.1.0 (or another tag) to pin
+    # to a specific release instead of following main.
+    REPO_REF="${CLAUDE_SEO_REF:-main}"
 
     # Extensions to SKIP (directory names under extensions/). All paid or
     # undesired for the free-only MVP.
