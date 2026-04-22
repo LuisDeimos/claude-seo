@@ -67,9 +67,9 @@ Compare against page type minimums:
 - Paragraph length: 2-4 sentences
 
 ### Keyword Optimization
-- Primary keyword in title, H1, first 100 words
-- Natural density (1-3%)
-- Semantic variations present
+- Primary keyword naturally present in title, H1, and introduction
+- Semantic variations and topical entities throughout (not numeric frequency)
+- No keyword density targets -- Google ranks on topical coverage and entity relevance, not on any keyword-to-word ratio (confirmed obsolete by Google Search Central; keyword density as a target is a documented anti-pattern)
 - No keyword stuffing
 
 ### Content Structure

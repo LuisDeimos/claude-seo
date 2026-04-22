@@ -171,10 +171,22 @@ def _load_oauth_token() -> Optional[dict]:
 
 
 def _save_oauth_token(token_data: dict):
-    """Save OAuth token to TOKEN_PATH."""
-    os.makedirs(os.path.dirname(TOKEN_PATH), exist_ok=True)
-    with open(TOKEN_PATH, "w") as f:
+    """Save OAuth token to TOKEN_PATH with restrictive permissions (0600)."""
+    config_dir = os.path.dirname(TOKEN_PATH)
+    os.makedirs(config_dir, exist_ok=True)
+    try:
+        os.chmod(config_dir, 0o700)
+    except OSError:
+        pass
+    # Open with 0600 from the start to avoid a race where the file is
+    # briefly world-readable before chmod runs.
+    fd = os.open(TOKEN_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
         json.dump(token_data, f, indent=2)
+    try:
+        os.chmod(TOKEN_PATH, 0o600)
+    except OSError:
+        pass
 
 
 def _refresh_oauth_token(client: dict, token_data: dict) -> Optional[dict]:
@@ -363,9 +375,30 @@ def _exchange_code(client: dict, code: str):
         sys.exit(1)
 
 
+_CGNAT_NET = None  # Lazy init to avoid importing ipaddress at module load.
+
+
+def _is_disallowed_ip(ip_obj) -> bool:
+    """Return True if the IP is private, loopback, link-local, multicast,
+    reserved, unspecified, or inside CGNAT (100.64.0.0/10)."""
+    import ipaddress
+
+    if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
+        return True
+    if ip_obj.is_multicast or ip_obj.is_reserved or ip_obj.is_unspecified:
+        return True
+    global _CGNAT_NET
+    if _CGNAT_NET is None:
+        _CGNAT_NET = ipaddress.ip_network("100.64.0.0/10")
+    if isinstance(ip_obj, ipaddress.IPv4Address) and ip_obj in _CGNAT_NET:
+        return True
+    return False
+
+
 def validate_url(url: str) -> bool:
     """
-    Validate a URL for use with Google APIs. Rejects private/loopback addresses.
+    Validate a URL for use with Google APIs. Rejects private/loopback/internal
+    addresses and hostnames that resolve to them (DNS rebinding protection).
 
     Args:
         url: URL string to validate.
@@ -374,26 +407,55 @@ def validate_url(url: str) -> bool:
         True if the URL is a valid public http/https URL, False otherwise.
     """
     from urllib.parse import urlparse
+    import ipaddress
+    import socket
 
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
         return False
     if not parsed.hostname:
         return False
-    blocked = [
+
+    hostname = parsed.hostname.lower()
+    blocked_hosts = {
         "localhost", "127.0.0.1", "0.0.0.0", "::1",
         "metadata.google.internal",
-    ]
-    if parsed.hostname in blocked:
+        "metadata",
+        "metadata.azure.com",
+        "169.254.169.254",
+    }
+    if hostname in blocked_hosts:
         return False
-    # Block private IP ranges (10.x, 172.16-31.x, 192.168.x)
+
+    # If hostname is a literal IP, check it directly.
     try:
-        import ipaddress
-        ip = ipaddress.ip_address(parsed.hostname)
-        if ip.is_private or ip.is_loopback or ip.is_link_local:
-            return False
+        ip = ipaddress.ip_address(hostname)
+        return not _is_disallowed_ip(ip)
     except ValueError:
-        pass  # Not an IP address (hostname), which is fine
+        pass  # Not a literal IP; fall through to DNS resolution.
+
+    # Resolve DNS and validate every returned address. This blocks hostnames
+    # that point to private ranges (DNS rebinding, split-horizon DNS).
+    try:
+        addrinfos = socket.getaddrinfo(hostname, None)
+    except (socket.gaierror, UnicodeError):
+        return False
+
+    if not addrinfos:
+        return False
+
+    for addrinfo in addrinfos:
+        addr = addrinfo[4][0]
+        # Strip IPv6 zone identifier if present.
+        if "%" in addr:
+            addr = addr.split("%", 1)[0]
+        try:
+            ip = ipaddress.ip_address(addr)
+        except ValueError:
+            return False
+        if _is_disallowed_ip(ip):
+            return False
+
     return True
 
 
